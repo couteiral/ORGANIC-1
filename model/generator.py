@@ -37,17 +37,17 @@ class Generator(object):
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
         self.sequence_length = sequence_length
-        self.reward_gamma = reward_gamma
-        self.temperature = temperature
-        self.grad_clip = grad_clip
-        self.start_token = tf.constant(
-            [start_token] * self.batch_size, dtype=tf.int32)
+        self.start_token = tf.constant([start_token] * self.batch_size, dtype=tf.int32)
         self.learning_rate = tf.Variable(float(learning_rate), trainable=False)
+        self.reward_gamma = reward_gamma
+        self.g_params = []
+        self.d_params = []
+        self.temperature = 1.0
+        self.grad_clip = 5.0
 
-        """
-        Set important internal variables
-        """
-        self.g_params = []  # This list will be updated with LSTM's parameters
+        # for tensorboard
+        self.g_count = 0
+
         self.expected_reward = tf.Variable(tf.zeros([self.sequence_length]))
         self.x = tf.placeholder(  # true data, not including start token
             tf.int32, shape=[self.batch_size, self.sequence_length])
@@ -157,6 +157,8 @@ class Generator(object):
             )
         ) / (self.sequence_length * self.batch_size)
 
+        self.s_pretrain_loss = tf.summary.scalar('gen_pretrain_loss', self.pretrain_loss)
+
         pretrain_opt = self.g_optimizer(self.learning_rate)  # training updates
         self.pretrain_grad, _ = tf.clip_by_global_norm(
             tf.gradients(self.pretrain_loss, self.g_params), self.grad_clip)
@@ -166,17 +168,51 @@ class Generator(object):
         """
         Unsupervised Training
         """
-        self.g_loss = -tf.reduce_sum(
-            tf.reduce_sum(
-                tf.one_hot(tf.to_int32(tf.reshape(self.x, [-1])), self.num_emb, 1.0, 0.0) * tf.log(
-                    tf.clip_by_value(tf.reshape(
-                        self.g_predictions, [-1, self.num_emb]), 1e-20, 1.0)
-                ), 1) * tf.reshape(self.rewards, [-1])
+        with tf.name_scope('gen_training'):
+            self.g_loss = -tf.reduce_sum(
+                tf.reduce_sum(
+                    tf.one_hot(tf.to_int32(tf.reshape(self.x, [-1])), self.num_emb, 1.0, 0.0) *
+                    tf.log(
+                        tf.clip_by_value(tf.reshape(self.g_predictions, [-1, self.num_emb]), 1e-20, 1.0)
+                    )
+                    , 1
+                ) * tf.reshape(self.rewards, [-1])
+            )
+
+            self.s_g_loss = tf.summary.scalar('gen_g_loss', self.g_loss)
+
+            g_opt = self.g_optimizer(self.learning_rate)
+
+            self.g_grad, _ = tf.clip_by_global_norm(tf.gradients(self.g_loss, self.g_params), self.grad_clip)
+            self.g_updates = g_opt.apply_gradients(zip(self.g_grad, self.g_params))
+
+    def generate_pretrain_summary(self, sess, x):
+        _summ = sess.run(
+            tf.summary.merge([
+                self.s_pretrain_loss
+            ]),
+            feed_dict={
+                self.x: x
+            }
         )
-        g_opt = self.g_optimizer(self.learning_rate)
-        self.g_grad, _ = tf.clip_by_global_norm(
-            tf.gradients(self.g_loss, self.g_params), self.grad_clip)
-        self.g_updates = g_opt.apply_gradients(zip(self.g_grad, self.g_params))
+        cur_g_count = self.g_count
+        #self.g_count += 1
+        return cur_g_count, _summ
+
+    def generate_gan_summary(self, sess, x, reward):
+        _summ = sess.run(
+            tf.summary.merge([
+                self.s_g_loss
+            ]),
+            feed_dict={
+                self.x: x,
+                self.rewards: reward
+            }
+        )
+        cur_g_count = self.g_count
+        #self.g_count += 1
+        return cur_g_count, _summ
+
 
     def generate(self, session):
         """Generates a batch of samples."""

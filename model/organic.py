@@ -218,6 +218,9 @@ class ORGANIC(object):
         else:
             self.DIS_L2REG = 0.2
 
+        if 'TBOARD_LOG' in params:
+            print('Tensorboard functionality')
+
         self.AV_METRICS = get_metrics()
         self.LOADINGS = metrics_loading()
 
@@ -318,7 +321,8 @@ class ORGANIC(object):
         self.dis_train_op = self.dis_optimizer.apply_gradients(
             self.dis_grads_and_vars, global_step=self.dis_global_step)
 
-        self.sess = tf.Session(config=self.config)
+        self.sess = tf.InteractiveSession()
+        #self.sess = tf.Session(config=self.config)
         self.folder = 'checkpoints/{}'.format(self.PREFIX)
 
     def define_metric(self, name, metric, load_metric=lambda *args: None,
@@ -825,7 +829,8 @@ class ORGANIC(object):
             print('============================\n')
             print('GENERATOR PRETRAINING')
 
-        for epoch in tqdm(range(self.PRETRAIN_GEN_EPOCHS)):
+        t_bar = trange(self.PRETRAIN_GEN_EPOCHS)
+        for epoch in t_bar:
 
             supervised_g_losses = []
             self.gen_loader.reset_pointer()
@@ -835,11 +840,9 @@ class ORGANIC(object):
                 _, g_loss, g_pred = self.generator.pretrain_step(self.sess,
                                                                  batch)
                 supervised_g_losses.append(g_loss)
-            loss = np.mean(supervised_g_losses)
 
-            if epoch % 10 == 0:
-
-                print('\t train_loss {}'.format(loss))
+            mean_g_loss = np.mean(supervised_g_losses)
+            t_bar.set_postfix(G_loss=mean_g_loss)
 
         samples = self.generate_samples(self.SAMPLE_NUM)
         self.mle_loader.create_batches(samples)
@@ -849,7 +852,8 @@ class ORGANIC(object):
             if self.verbose:
                 print('\nDISCRIMINATOR PRETRAINING')
 
-            for i in tqdm(range(self.PRETRAIN_DIS_EPOCHS)):
+            t_bar = trange(self.PRETRAIN_DIS_EPOCHS)
+            for i in t_bar:
 
                 negative_samples = self.generate_samples(self.POSITIVE_NUM)
                 dis_x_train, dis_y_train = self.dis_loader.load_train_data(
@@ -870,6 +874,9 @@ class ORGANIC(object):
                          self.discriminator.loss, self.discriminator.accuracy],
                         feed)
 
+                mean_d_loss = np.mean(supervised_d_losses)
+                t_bar.set_postfix(D_loss=mean_d_loss)
+
         self.PRETRAINED = True
 
     def generate_samples(self, num):
@@ -888,6 +895,23 @@ class ORGANIC(object):
             generated_samples.extend(self.generator.generate(self.sess))
 
         return generated_samples
+
+    def report_rewards(self, rewards, metric):
+        print('~~~~~~~~~~~~~~~~~~~~~~~~\n')
+        print('Reward: {}  (lambda={:.2f})'.format(metric, self.LAMBDA))
+        #np.set_printoptions(precision=3, suppress=True)
+        mean_r, std_r = np.mean(rewards), np.std(rewards)
+        min_r, max_r = np.min(rewards), np.max(rewards)
+        print('Stats: {:.3f} ({:.3f}) [{:3f},{:.3f}]'.format(
+            mean_r, std_r, min_r, max_r))
+        non_neg = rewards[rewards > 0.01]
+        if len(non_neg) > 0:
+            mean_r, std_r = np.mean(non_neg), np.std(non_neg)
+            min_r, max_r = np.min(non_neg), np.max(non_neg)
+            print('Valid: {:.3f} ({:.3f}) [{:3f},{:.3f}]'.format(
+                mean_r, std_r, min_r, max_r))
+        #np.set_printoptions(precision=8, suppress=False)
+        return
 
     def train(self, ckpt_dir='checkpoints/'):
         """Trains the model. If necessary, also includes pretraining."""
@@ -914,10 +938,10 @@ class ORGANIC(object):
             print('============================\n')
 
         results_rows = []
+        losses = defaultdict(list)
         for nbatch in tqdm(range(self.TOTAL_BATCH)):
 
             results = OrderedDict({'exp_name': self.PREFIX})
-
             metric = self.EDUCATION[nbatch]
 
             if metric in self.AV_METRICS.keys():
@@ -970,20 +994,12 @@ class ORGANIC(object):
                 rewards = self.rollout.get_reward(
                     self.sess, samples, 16, self.discriminator,
                     batch_reward, self.LAMBDA)
-                nll = self.generator.generator_step(
+                g_loss = self.generator.generator_step(
                     self.sess, samples, rewards)
+                losses['G-loss'].append(g_loss)
+                self.generator.g_count = self.generator.g_count + 1
+                self.report_rewards(rewards, metric)
 
-                print('Rewards')
-                print('~~~~~~~~~~~~~~~~~~~~~~~~\n')
-                np.set_printoptions(precision=3, suppress=True)
-                mean_r, std_r = np.mean(rewards), np.std(rewards)
-                min_r, max_r = np.min(rewards), np.max(rewards)
-                print('Mean:                {:.3f}'.format(mean_r))
-                print('               +/-   {:.3f}'.format(std_r))
-                print('Min:                 {:.3f}'.format(min_r))
-                print('Max:                 {:.3f}'.format(max_r))
-                np.set_printoptions(precision=8, suppress=False)
-                results['neg-loglike'] = nll
             self.rollout.update_params()
 
             # generate for discriminator
@@ -1001,22 +1017,22 @@ class ORGANIC(object):
                         self.DIS_BATCH_SIZE, self.DIS_EPOCHS
                     )
 
+                    d_losses, ce_losses, l2_losses,w_loss = [], [], [],[]
                     for batch in dis_batches:
                         x_batch, y_batch = zip(*batch)
-                        feed = {
-                            self.discriminator.input_x: x_batch,
-                            self.discriminator.input_y: y_batch,
-                            self.discriminator.dropout_keep_prob:
-                                self.DIS_DROPOUT
-                        }
-                        _, step, d_loss, accuracy = self.sess.run(
-                            [self.dis_train_op, self.dis_global_step,
-                             self.discriminator.loss,
-                             self.discriminator.accuracy],
-                            feed)
+                        _, d_loss, ce_loss, l2_loss,w_loss = self.discriminator.train(
+                            self.sess, x_batch, y_batch, self.DIS_DROPOUT)
+                        d_losses.append(d_loss)
+                        ce_losses.append(ce_loss)
+                        l2_losses.append(l2_loss)
 
-                    results['D_loss_{}'.format(i)] = d_loss
-                    results['Accuracy_{}'.format(i)] = accuracy
+                    losses['D-loss'].append(np.mean(d_losses))
+                    losses['CE-loss'].append(np.mean(ce_losses))
+                    losses['L2-loss'].append(np.mean(l2_losses))
+                    losses['WGAN-loss'].append(np.mean(l2_losses))
+
+                    self.discriminator.d_count = self.discriminator.d_count + 1
+
                 print('\nDiscriminator trained.')
             results_rows.append(results)
             if nbatch % self.EPOCH_SAVES == 0 or \

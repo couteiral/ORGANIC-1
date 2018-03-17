@@ -1029,6 +1029,11 @@ class ORGANIC(object):
                     losses['L2-loss'].append(np.mean(l2_losses))
                     losses['WGAN-loss'].append(np.mean(l2_losses))
 
+                    # Early stopping
+                    if i > 1:
+                        if d_loss[-1] < 1.0E-06 and 0.995 < d_loss[-2]/d_loss[-1] < 2.0:
+                            break
+
                     self.discriminator.d_count = self.discriminator.d_count + 1
 
                 print('\nDiscriminator trained.')

@@ -112,12 +112,12 @@ class ORGANIC(object):
         if 'PRETRAIN_GEN_EPOCHS' in params:
             self.PRETRAIN_GEN_EPOCHS = params['PRETRAIN_GEN_EPOCHS']
         else:
-            self.PRETRAIN_GEN_EPOCHS = 240
+            self.PRETRAIN_GEN_EPOCHS = 250
 
         if 'PRETRAIN_DIS_EPOCHS' in params:
             self.PRETRAIN_DIS_EPOCHS = params['PRETRAIN_DIS_EPOCHS']
         else:
-            self.PRETRAIN_DIS_EPOCHS = 50
+            self.PRETRAIN_DIS_EPOCHS = 15
 
         if 'GEN_ITERATIONS' in params:
             self.GEN_ITERATIONS = params['GEN_ITERATIONS']
@@ -144,7 +144,7 @@ class ORGANIC(object):
         if 'DIS_EPOCHS' in params:
             self.DIS_EPOCHS = params['DIS_EPOCHS']
         else:
-            self.DIS_EPOCHS = 3
+            self.DIS_EPOCHS = 10
 
         if 'EPOCH_SAVES' in params:
             self.EPOCH_SAVES = params['EPOCH_SAVES']

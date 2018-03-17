@@ -36,7 +36,7 @@ except Exception:
 from nn_metrics import KerasNN
 #from gp_metrics import GaussianProcess
 from builtins import range
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from generator import Generator, Rollout
 import numpy as np
 import tensorflow as tf
@@ -49,7 +49,7 @@ from custom_metrics import get_metrics, metrics_loading
 from tensorflow import logging
 from rdkit import rdBase
 import pandas as pd
-from tqdm import tqdm
+from tqdm import tqdm, trange
 __version__ = '0.4.0'
 
 __logo__ = """
@@ -323,6 +323,8 @@ class ORGANIC(object):
 
         self.sess = tf.InteractiveSession()
         #self.sess = tf.Session(config=self.config)
+        if not os.path.exists('checkpoints/'):
+            os.mkdir('checkpoints/')
         self.folder = 'checkpoints/{}'.format(self.PREFIX)
 
     def define_metric(self, name, metric, load_metric=lambda *args: None,
@@ -862,18 +864,14 @@ class ORGANIC(object):
                     zip(dis_x_train, dis_y_train), self.DIS_BATCH_SIZE,
                     self.PRETRAIN_DIS_EPOCHS)
 
+                supervised_d_losses = []
                 for batch in dis_batches:
                     x_batch, y_batch = zip(*batch)
-                    feed = {
-                        self.discriminator.input_x: x_batch,
-                        self.discriminator.input_y: y_batch,
-                        self.discriminator.dropout_keep_prob: self.DIS_DROPOUT
-                    }
-                    _, step, loss, accuracy = self.sess.run(
-                        [self.dis_train_op, self.dis_global_step,
-                         self.discriminator.loss, self.discriminator.accuracy],
-                        feed)
+                    _, d_loss,_,_,_ = self.discriminator.train(
+                        self.sess, x_batch, y_batch, self.DIS_DROPOUT)
 
+                    supervised_d_losses.append(d_loss)
+                # print results
                 mean_d_loss = np.mean(supervised_d_losses)
                 t_bar.set_postfix(D_loss=mean_d_loss)
 
@@ -1063,8 +1061,11 @@ class ORGANIC(object):
 if __name__ == '__main__':
 
     # Setup model
-    model = ORGANIC('metrics', params={'PRETRAIN_GEN_EPOCHS': 1, 'PRETRAIN_DIS_EPOCHS': 1})
+    model = ORGANIC('metrics', params={'PRETRAIN_GEN_EPOCHS': 250, 'PRETRAIN_DIS_EPOCHS': 50,
+                                       'MAX_LENGTH': 12, 'DIS_FILTER_SIZES': [1, 2, 3, 4, 5, 6, 7],
+                                       'DIS_NUM_FILTERS': [100, 100, 100, 100, 100, 100, 100]})
+
     model.load_training_set('../data/trainingsets/toy.csv')
-    model.set_training_program(['validity'], [1])
+    model.set_training_program(['validity'], [15])
     model.load_metrics()
     model.train(ckpt_dir='ckpt')
